@@ -1,17 +1,12 @@
 {
   "name": "verhoertrainer",
   "version": "1.0.0",
-  "description": "Verhör-Trainer — AI-Trainer für DE/CH/AT",
   "main": "bot.js",
-  "scripts": {
-    "start": "node bot.js"
-  },
+  "scripts": { "start": "node bot.js" },
   "dependencies": {
     "express": "^4.19.2",
     "grammy": "^1.30.0",
     "openai": "^4.50.0"
   },
-  "engines": {
-    "node": "20.x"
-  }
+  "engines": { "node": "20.x" }
 }
