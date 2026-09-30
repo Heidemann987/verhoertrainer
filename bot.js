@@ -1,15 +1,13 @@
-// bot.js — Verhör-Trainer (DE/CH/AT, deutsche Sprache, Monetasierung via Stars)
+// bot.js — Verhör-Trainer (DE/CH/AT, ohne Bezahlung)
 const { Bot, InlineKeyboard, InputFile } = require('grammy');
 const OpenAI = require('openai');
 const express = require('express');
 const fs = require('fs');
-const Database = require('better-sqlite3');
 
 // ============ CONFIG ============
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 const MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
-const PRICE_XTR = 100; // 100 Stars (~2 USD) — единый платёж
 
 if (!BOT_TOKEN) { console.error('TELEGRAM_BOT_TOKEN missing'); process.exit(1); }
 if (!OPENROUTER_KEY) { console.error('OPENROUTER_API_KEY missing'); process.exit(1); }
@@ -18,28 +16,6 @@ const ai = new OpenAI({
   apiKey: OPENROUTER_KEY,
   baseURL: 'https://openrouter.ai/api/v1'
 });
-
-// ============ DATABASE ============
-const db = new Database('/tmp/verhoer.db');
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    is_paid INTEGER DEFAULT 0,
-    paid_at TEXT
-  )
-`);
-
-function isUserPaid(userId) {
-  const row = db.prepare('SELECT is_paid FROM users WHERE user_id = ?').get(userId);
-  return row && row.is_paid === 1;
-}
-function markUserPaid(userId) {
-  db.prepare(`
-    INSERT INTO users (user_id, is_paid, paid_at)
-    VALUES (?, 1, datetime('now'))
-    ON CONFLICT(user_id) DO UPDATE SET is_paid = 1, paid_at = datetime('now')
-  `).run(userId);
-}
 
 // ============ STATUS LABELS ============
 const STATUS = {
@@ -74,7 +50,7 @@ function buildPrompt(jur, status) {
     },
     CH: {
       name: 'Schweiz',
-      laws: `- Bundesverfassung (BV), Art. 31 — Verteidigungsrechte (Recht auf Verteidiger, Recht auf Akteneinsicht)
+      laws: `- Bundesverfassung (BV), Art. 31 — Verteidigungsrechte
 - Bundesverfassung (BV), Art. 32 — Unschuldsvermutung, Recht auf Gehör
 - Schweizerische StPO, Art. 113 — Rechte der beschuldigten Person
 - Schweizerische StPO, Art. 158 — Einvernahme der beschuldigten Person
@@ -82,7 +58,6 @@ function buildPrompt(jur, status) {
 - Schweizerische StPO, Art. 160 — Belehrung
 - Schweizerische StPO, Art. 179 — Zeugeneinvernahme
 - StGB, Art. 305 — Begünstigung
-- ZGB — Zivilrechtliche Verfahren
 - JStPO — Jugendstrafprozessordnung`
     },
     AT: {
@@ -140,27 +115,9 @@ const sessions = new Map();
 const bot = new Bot(BOT_TOKEN);
 bot.catch((err) => console.error('Bot error:', err));
 
-// ============ PAYWALL ============
-function getPaywall(ctx) {
-  const kb = new InlineKeyboard().text(`⭐ Zugang freischalten — ${PRICE_XTR} Stars`, 'buy_access');
-  return ctx.reply(
-    '⚖️ *Verhör-Trainer*\n\n' +
-    'Vollzugang zum Training — *einmalige Zahlung*.\n' +
-    'Unbegrenzt, ohne Abo.\n\n' +
-    `Preis: *${PRICE_XTR} Telegram Stars*`,
-    { parse_mode: 'Markdown', reply_markup: kb }
-  );
-}
-
 // ============ /start ============
 bot.command('start', async (ctx) => {
-  const userId = ctx.from.id;
-
-  if (!isUserPaid(userId)) {
-    return getPaywall(ctx);
-  }
-
-  sessions.delete(userId);
+  sessions.delete(ctx.from.id);
 
   const kb = new InlineKeyboard()
     .text('🇩🇪 Deutschland', 'jur:DE').row()
@@ -171,37 +128,6 @@ bot.command('start', async (ctx) => {
     '⚖️ *Verhör-Trainer*\n\n' +
     'Wählen Sie die Jurisdiktion:',
     { parse_mode: 'Markdown', reply_markup: kb }
-  );
-});
-
-// ============ BUY ============
-bot.callbackQuery('buy_access', async (ctx) => {
-  const userId = ctx.from.id;
-  await ctx.answerCallbackQuery();
-
-  await ctx.replyWithInvoice(
-    'Vollzugang Verhör-Trainer',
-    'Einmalige Zahlung. Unbegrenzter Zugang zu allen Funktionen.',
-    `verhoer_access_${userId}`,
-    'XTR',
-    [{ label: 'Vollzugang', amount: PRICE_XTR }],
-    { provider_token: '' }
-  );
-});
-
-// ============ PAYMENT ============
-bot.on('message:successful_payment', async (ctx) => {
-  const userId = ctx.from.id;
-  const payment = ctx.message.successful_payment;
-
-  console.log('✅ Payment:', { userId, amount: payment.total_amount, currency: payment.currency });
-
-  markUserPaid(userId);
-
-  await ctx.reply(
-    '✅ *Zahlung erhalten!*\n\n' +
-    'Zugang wurde aktiviert. Senden Sie /start, um zu beginnen.',
-    { parse_mode: 'Markdown' }
   );
 });
 
@@ -351,12 +277,8 @@ bot.on('message:text', async (ctx) => {
   if (text.startsWith('/')) return;
 
   const userId = ctx.from.id;
-
-  if (!isUserPaid(userId)) {
-    return getPaywall(ctx);
-  }
-
   const sess = sessions.get(userId);
+
   if (!sess) return ctx.reply('Senden Sie /start.');
   if (!sess.jurisdiction) return ctx.reply('Wählen Sie die Jurisdiktion: /start');
   if (!sess.status) return ctx.reply('Wählen Sie den Verfahrensstatus.');
